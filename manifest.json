@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "LinkMap: Favorites Manager",
+  "version": "1.0",
+  "description": "Visualize, organize, and manage your browser bookmarks in an interactive node map.",
+  "permissions": [
+    "bookmarks"
+  ],
+  "action": {},
+  "background": {
+    "service_worker": "background.js"
+  }
+}

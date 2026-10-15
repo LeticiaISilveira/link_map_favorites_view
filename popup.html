@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <title>LinkCluster Dashboard</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #0b0f19;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    /* Onde a rede neural vai ser renderizada (ocupa a tela toda) */
+    #network {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Painel flutuante de controlos e filtros */
+    #controls {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(17, 24, 39, 0.85);
+      backdrop-filter: blur(8px);
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #fff;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      z-index: 10;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    }
+
+    #count {
+      font-size: 13px;
+      color: #9ca3af;
+      font-weight: bold;
+    }
+
+    .filter-btn {
+      background: #1f2937;
+      color: #d1d5db;
+      border: 1px solid #374151;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+
+    .filter-btn:hover {
+      background: #3b82f6;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Floating control panel positioned away from the brain. -->
+  <div id="controls">
+    <span id="count">0 visible nodes</span>
+    <button class="filter-btn" data-filter="all">Show All</button>
+    <button class="filter-btn" data-filter="folders">Folders Only</button>
+    <button class="filter-btn" data-filter="domains">Domains Only</button>
+  </div>
+
+  <!-- Neural network view. -->
+  <div id="network"></div>
+
+  <!-- Scripts -->
+  <script src="vis-network.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
