@@ -49,6 +49,8 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
       node.children.forEach(child => traverse(child, folderId));
 
     } else if (node.url) {
+      // Classifica inteligentemente usando o classificador global do classifier.js
+      const categoriaInteligente = classifier.classify(`${node.title} ${node.url}`);
       const domain = getDomain(node.url);
       const folderKey = `${parentId}_${domain}`;
 
@@ -56,8 +58,8 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
         domains[folderKey] = nodeId++;
         allNodes.push({
           id: domains[folderKey],
-          label: domain,
-          title: `https://${domain}`,
+          label: `${domain} [${categoriaInteligente}]`,
+          title: `Categoria: ${categoriaInteligente} - https://${domain}`,
           url: `https://${domain}`,
           color: '#3b82f6',
           size: 14,
@@ -77,7 +79,7 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
       allNodes.push({
         id: currentLinkId,
         label: node.title.length > 20 ? node.title.substring(0, 18) + '...' : node.title,
-        title: node.url,
+        title: `${node.url} [${categoriaInteligente}]`,
         url: node.url,
         color: '#10b981',
         size: 7,
@@ -121,7 +123,6 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
 
   const network = new vis.Network(container, data, options);
 
-  // Apply the filters and fit the network perfectly on screen.
   function filtrarRede(tipo) {
     let filteredNodes = [];
     let filteredEdges = [];
@@ -144,21 +145,19 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
 
     document.getElementById('count').innerText = `${filteredNodes.length - 1} visible nodes`;
 
-    // Let vis.js automatically calculate the ideal space occupied by the visible nodes.
     setTimeout(() => {
       network.fit({
         animation: {
           duration: 700,
           easingFunction: 'easeInOutQuad'
-        }
+        },
+        scale: 0.38
       });
     }, 50);
   }
 
-  // Initialize the network with everything displayed.
   filtrarRede('all');
 
-  // Handle clicks on the interface's filter buttons.
   document.querySelectorAll('.filter-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const filtro = e.target.getAttribute('data-filter');
@@ -166,21 +165,18 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
     });
   });
 
-  // Freeze the node when the pointer hovers over it.
   network.on("hoverNode", function (params) {
     container.style.cursor = "pointer";
     const nodeId = params.node;
     nodesDataSet.update({ id: nodeId, fixed: { x: true, y: true } });
   });
 
-  // Unfreeze the node when the pointer leaves it.
   network.on("blurNode", function (params) {
     container.style.cursor = "default";
     const nodeId = params.node;
     nodesDataSet.update({ id: nodeId, fixed: { x: false, y: false } });
   });
 
-  // Open the link in a new tab on double-click.
   network.on("doubleClick", function (params) {
     if (params.nodes.length > 0) {
       const clickedNode = nodesDataSet.get(params.nodes[0]);
@@ -190,7 +186,6 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
     }
   });
 
-  // Delete the bookmark with a right-click.
   network.on("oncontext", function (params) {
     params.event.preventDefault();
     if (params.nodes.length > 0) {
