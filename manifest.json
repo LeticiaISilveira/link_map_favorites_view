@@ -6,6 +6,9 @@
   "permissions": [
     "bookmarks"
   ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "action": {},
   "background": {
     "service_worker": "background.js"

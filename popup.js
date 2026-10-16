@@ -7,10 +7,177 @@ function getDomain(url) {
   }
 }
 
+function extractPageSignals(html, fallbackText, pageUrl) {
+  if (!html) {
+    return [{ text: fallbackText, weight: 1 }];
+  }
+
+  const page = new DOMParser().parseFromString(html, 'text/html');
+  const strongSignals = [];
+  const supportingSignals = [page.title, fallbackText];
+  const metadata = page.querySelectorAll(
+    'meta[property="article:tag"], meta[property="article:section"], meta[name="keywords"], meta[name="description"], meta[property="og:title"], meta[property="og:description"]'
+  );
+
+  metadata.forEach(meta => {
+    const content = meta.getAttribute('content');
+    if (!content) return;
+
+    const name = (meta.getAttribute('property') || meta.getAttribute('name') || '').toLowerCase();
+    if (name === 'article:tag' || name === 'article:section' || name === 'keywords') {
+      strongSignals.push(content);
+    } else {
+      supportingSignals.push(content);
+    }
+  });
+
+  page.querySelectorAll('h1, h2').forEach((heading, index) => {
+    if (index < 5) supportingSignals.push(heading.textContent);
+  });
+
+  const tagPath = /\/(?:tag|tags|category|categories|topic|topics|label|labels|keyword|keywords)\/([^/]+)/i;
+  const baseUrl = page.querySelector('base[href]')?.href || pageUrl;
+  const hrefTags = new Set();
+  page.querySelectorAll('a[href]').forEach(link => {
+    let pathname;
+    try {
+      pathname = new URL(link.getAttribute('href'), baseUrl).pathname;
+    } catch {
+      return;
+    }
+    const match = pathname.match(tagPath);
+    if (match) {
+      try {
+        hrefTags.add(decodeURIComponent(match[1]).replace(/[-_]/g, ' '));
+      } catch (error) {
+        console.warn('Could not decode a page tag URL.', link.href, error);
+      }
+    }
+  });
+
+  if (hrefTags.size > 0 && hrefTags.size <= 3) {
+    strongSignals.push(...hrefTags);
+  }
+
+  return [
+    ...strongSignals.filter(Boolean).map(text => ({ text, weight: 3 })),
+    ...supportingSignals.filter(Boolean).map(text => ({ text, weight: 1 }))
+  ];
+}
+
+function loadPageHtml(url, cache, activeControllers) {
+  if (cache.has(url)) {
+    return cache.get(url);
+  }
+
+  const request = (async () => {
+    if (!/^https?:\/\//i.test(url)) {
+      return null;
+    }
+
+    const controller = new AbortController();
+    activeControllers.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      if (contentType && !contentType.includes('text/html')) {
+        return null;
+      }
+
+      const contentLength = Number(response.headers.get('content-length'));
+      if (contentLength > 2_000_000) {
+        console.warn('Skipping bookmark HTML larger than 2 MB.', url);
+        return null;
+      }
+
+      const html = await response.text();
+      if (html.length > 2_000_000) {
+        console.warn('Skipping bookmark HTML larger than 2 MB.', url);
+        return null;
+      }
+      return html;
+    } catch (error) {
+      console.warn('Could not fetch bookmark HTML; using its title and URL.', url, error);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+      activeControllers.delete(controller);
+    }
+  })();
+
+  cache.set(url, request);
+  return request;
+}
+
+async function classifyBookmarks(bookmarks) {
+  const results = new Map(bookmarks.map(bookmark => [
+    bookmark.id,
+    classifier.classify(`${bookmark.title || ''} ${bookmark.url}`)
+  ]));
+  const htmlCache = new Map();
+  const activeControllers = new Set();
+  let nextIndex = 0;
+  let stop = false;
+  const workerCount = Math.min(12, bookmarks.length);
+
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (!stop && nextIndex < bookmarks.length) {
+      const bookmark = bookmarks[nextIndex++];
+      const html = await loadPageHtml(bookmark.url, htmlCache, activeControllers);
+      if (stop) return;
+
+      const context = `${bookmark.title || ''} ${bookmark.url}`;
+      const signals = extractPageSignals(html, context, bookmark.url);
+      results.set(bookmark.id, classifier.classify(signals));
+    }
+  });
+
+  let timedOut = false;
+  let timeoutId;
+  await Promise.race([
+    Promise.all(workers),
+    new Promise(resolve => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, 5000);
+    })
+  ]);
+  clearTimeout(timeoutId);
+
+  if (timedOut) {
+    stop = true;
+    activeControllers.forEach(controller => controller.abort());
+    console.warn('Page metadata scan timed out; showing the map with available classifications.');
+    await Promise.all(workers);
+  }
+
+  return results;
+}
+
+document.getElementById('count').innerText = 'Loading bookmarks...';
 chrome.bookmarks.getTree((bookmarkTreeNodes) => {
+  void (async () => {
+  const bookmarks = [];
+  function collectBookmarks(node) {
+    if (node.children) {
+      node.children.forEach(child => collectBookmarks(child));
+    } else if (node.url) {
+      bookmarks.push(node);
+    }
+  }
+  bookmarkTreeNodes.forEach(root => collectBookmarks(root));
+
+  const bookmarkCategories = await classifyBookmarks(bookmarks);
   let allNodes = [];
   let allEdges = [];
   let domains = {};
+  let categoryGroups = {};
   let nodeId = 1;
 
   // 1. Central Node (Brain)
@@ -49,27 +216,46 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
       node.children.forEach(child => traverse(child, folderId));
 
     } else if (node.url) {
-      // Classifica inteligentemente usando o classificador global do classifier.js
-      const categoriaInteligente = classifier.classify(`${node.title} ${node.url}`);
+      const category = bookmarkCategories.get(node.id) || 'General';
       const domain = getDomain(node.url);
-      const folderKey = `${parentId}_${domain}`;
+      const categoryKey = `${parentId}_${category}`;
 
-      if (!domains[folderKey]) {
-        domains[folderKey] = nodeId++;
+      if (!categoryGroups[categoryKey]) {
+        categoryGroups[categoryKey] = nodeId++;
         allNodes.push({
-          id: domains[folderKey],
-          label: `${domain} [${categoriaInteligente}]`,
-          title: `Categoria: ${categoriaInteligente} - https://${domain}`,
+          id: categoryGroups[categoryKey],
+          label: '',
+          size: 1,
+          color: { background: 'rgba(0, 0, 0, 0)', border: 'rgba(0, 0, 0, 0)' },
+          type: 'category',
+          parentId: parentId
+        });
+        allEdges.push({
+          from: parentId,
+          to: categoryGroups[categoryKey],
+          color: { color: '#a78bfa', opacity: 0.08 },
+          type: 'category-edge'
+        });
+      }
+
+      const domainKey = `${categoryKey}_${domain}`;
+
+      if (!domains[domainKey]) {
+        domains[domainKey] = nodeId++;
+        allNodes.push({
+          id: domains[domainKey],
+          label: domain,
+          title: `https://${domain}`,
           url: `https://${domain}`,
           color: '#3b82f6',
           size: 14,
           font: { color: '#60a5fa', size: 9 },
           type: 'domain',
-          parentId: parentId
+          parentId: categoryGroups[categoryKey]
         });
         allEdges.push({ 
-          from: parentId, 
-          to: domains[folderKey], 
+          from: categoryGroups[categoryKey], 
+          to: domains[domainKey], 
           color: { color: '#3b82f6', opacity: 0.25 },
           type: 'domain-edge'
         });
@@ -79,16 +265,16 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
       allNodes.push({
         id: currentLinkId,
         label: node.title.length > 20 ? node.title.substring(0, 18) + '...' : node.title,
-        title: `${node.url} [${categoriaInteligente}]`,
+        title: node.url,
         url: node.url,
         color: '#10b981',
         size: 7,
         font: { color: '#9ca3af', size: 8 },
         type: 'url',
-        parentId: domains[folderKey]
+        parentId: domains[domainKey]
       });
       allEdges.push({ 
-        from: domains[folderKey], 
+        from: domains[domainKey], 
         to: currentLinkId, 
         color: { color: '#10b981', opacity: 0.15 },
         type: 'url-edge'
@@ -134,8 +320,8 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
       filteredNodes = allNodes.filter(n => n.type === 'brain' || n.type === 'folder');
       filteredEdges = allEdges.filter(e => e.type === 'folder-edge');
     } else if (tipo === 'domains') {
-      filteredNodes = allNodes.filter(n => n.type === 'brain' || n.type === 'folder' || n.type === 'domain');
-      filteredEdges = allEdges.filter(e => e.type === 'folder-edge' || e.type === 'domain-edge');
+      filteredNodes = allNodes.filter(n => n.type === 'brain' || n.type === 'folder' || n.type === 'category' || n.type === 'domain');
+      filteredEdges = allEdges.filter(e => e.type === 'folder-edge' || e.type === 'category-edge' || e.type === 'domain-edge');
     }
 
     nodesDataSet.clear();
@@ -143,7 +329,8 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
     nodesDataSet.add(filteredNodes);
     edgesDataSet.add(filteredEdges);
 
-    document.getElementById('count').innerText = `${filteredNodes.length - 1} visible nodes`;
+    const visibleNodeCount = filteredNodes.filter(n => n.type !== 'brain' && n.type !== 'category').length;
+    document.getElementById('count').innerText = `${visibleNodeCount} visible nodes`;
 
     setTimeout(() => {
       network.fit({
@@ -206,5 +393,9 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
         }
       }
     }
+  });
+  })().catch(error => {
+    console.error('Could not initialize the bookmark map.', error);
+    document.getElementById('count').innerText = 'Could not load bookmarks. See console for details.';
   });
 });
