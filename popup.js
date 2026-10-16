@@ -184,7 +184,7 @@ chrome.bookmarks.getTree((bookmarkTreeNodes) => {
   allNodes.push({ 
     id: 0, 
     label: 'Brain', 
-    color: '#ff007f', 
+    color: '#e01f86', 
     size: 36, 
     font: { color: '#ffffff', size: 14 },
     type: 'brain'
